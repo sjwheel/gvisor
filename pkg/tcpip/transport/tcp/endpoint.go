@@ -1441,7 +1441,7 @@ func (e *endpoint) commitRead(done int) *segment {
 		// Memory is only considered released when the whole segment has been
 		// read.
 		memDelta += s.segMemSize()
-		s.decRef()
+		s.DecRef()
 		s = e.rcvQueueInfo.rcvQueue.Front()
 	}
 	e.rcvQueueInfo.RcvBufUsed -= done
@@ -1569,6 +1569,7 @@ func (e *endpoint) queueSegment(p tcpip.Payloader, opts tcpip.WriteOptions) (*se
 	// Add data to the send queue.
 	s := newOutgoingSegment(e.TransportEndpointInfo.ID, e.stack.Clock(), v)
 	e.sndQueueInfo.SndBufUsed += len(v)
+	s.IncRef()
 	e.snd.writeList.PushBack(s)
 
 	return s, len(v), nil
@@ -1586,6 +1587,7 @@ func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, tcp
 	// Return if either we didn't queue anything or if an error occurred while
 	// attempting to queue data.
 	nextSeg, n, err := e.queueSegment(p, opts)
+	defer nextSeg.DecRef()
 	if n == 0 || err != nil {
 		return 0, err
 	}
@@ -2431,6 +2433,15 @@ func (e *endpoint) shutdownLocked(flags tcpip.ShutdownFlags) tcpip.Error {
 			e.rcvQueueInfo.rcvQueueMu.Lock()
 			e.rcvQueueInfo.RcvClosed = true
 			rcvBufUsed := e.rcvQueueInfo.RcvBufUsed
+
+			s := e.rcvQueueInfo.rcvQueue.Front()
+			for s != nil {
+				next := s.Next()
+				e.rcvQueueInfo.rcvQueue.Remove(s)
+				s.DecRef()
+				s = next
+			}
+
 			e.rcvQueueInfo.rcvQueueMu.Unlock()
 
 			// If we're fully closed and we have unread data we need to abort
@@ -2460,6 +2471,8 @@ func (e *endpoint) shutdownLocked(flags tcpip.ShutdownFlags) tcpip.Error {
 
 			// Queue fin segment.
 			s := newOutgoingSegment(e.TransportEndpointInfo.ID, e.stack.Clock(), nil)
+			defer s.DecRef()
+			s.IncRef()
 			e.snd.writeList.PushBack(s)
 			// Mark endpoint as closed.
 			e.sndQueueInfo.SndClosed = true
@@ -2855,7 +2868,7 @@ func (e *endpoint) readyToRead(s *segment) {
 	e.rcvQueueInfo.rcvQueueMu.Lock()
 	if s != nil {
 		e.rcvQueueInfo.RcvBufUsed += s.payloadSize()
-		s.incRef()
+		s.IncRef()
 		e.rcvQueueInfo.rcvQueue.PushBack(s)
 	} else {
 		e.rcvQueueInfo.RcvClosed = true
