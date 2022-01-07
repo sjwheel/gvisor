@@ -29,6 +29,7 @@ import (
 	"gvisor.dev/gvisor/pkg/metric"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
 	"gvisor.dev/gvisor/pkg/sentry/memmap"
+	"gvisor.dev/gvisor/pkg/sentry/seccheck"
 )
 
 // SyscallRestartBlock represents the restart block for a syscall restartable
@@ -88,6 +89,30 @@ func (t *Task) executeSyscall(sysno uintptr, args arch.SyscallArguments) (rval u
 		straceContext = s.Stracer.SyscallEnter(t, sysno, args, fe)
 	}
 
+	if seccheck.Global.Enabled(seccheck.PointSyscallEnter) {
+		seccheck.Global.SendToCheckers(func(c seccheck.Checker) error {
+			info := seccheck.SyscallInfo{
+				Type:  seccheck.SyscallEnter,
+				Sysno: sysno,
+				Args:  args,
+			}
+			return c.RawSyscall(t, info)
+		})
+	}
+	if seccheck.Global.SyscallEnabledEnter(sysno) {
+		cb := t.SyscallTable().LookupSyscallToProto(sysno)
+		if cb != nil {
+			seccheck.Global.SendToCheckers(func(c seccheck.Checker) error {
+				info := seccheck.SyscallInfo{
+					Type:  seccheck.SyscallEnter,
+					Sysno: sysno,
+					Args:  args,
+				}
+				return c.Syscall(t, cb, info)
+			})
+		}
+	}
+
 	if bits.IsOn32(fe, ExternalBeforeEnable) && (s.ExternalFilterBefore == nil || s.ExternalFilterBefore(t, sysno, args)) {
 		t.invokeExternal()
 		// Ensure we check for stops, then invoke the syscall again.
@@ -117,6 +142,34 @@ func (t *Task) executeSyscall(sysno uintptr, args arch.SyscallArguments) (rval u
 
 	if bits.IsAnyOn32(fe, StraceEnableBits) {
 		s.Stracer.SyscallExit(straceContext, t, sysno, rval, err)
+	}
+
+	if seccheck.Global.Enabled(seccheck.PointSyscallExit) {
+		seccheck.Global.SendToCheckers(func(c seccheck.Checker) error {
+			info := seccheck.SyscallInfo{
+				Type:  seccheck.SyscallExit,
+				Sysno: sysno,
+				Args:  args,
+				Rval:  rval,
+				Errno: ExtractErrno(err, int(sysno)),
+			}
+			return c.RawSyscall(t, info)
+		})
+	}
+	if seccheck.Global.SyscallEnabledExit(sysno) {
+		cb := t.SyscallTable().LookupSyscallToProto(sysno)
+		if cb != nil {
+			seccheck.Global.SendToCheckers(func(c seccheck.Checker) error {
+				info := seccheck.SyscallInfo{
+					Type:  seccheck.SyscallExit,
+					Sysno: sysno,
+					Args:  args,
+					Rval:  rval,
+					Errno: ExtractErrno(err, int(sysno)),
+				}
+				return c.Syscall(t, cb, info)
+			})
+		}
 	}
 
 	return
