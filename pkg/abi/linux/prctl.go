@@ -145,6 +145,13 @@ const (
 	// Protection eXtensions (MPX) bounds tables.
 	PR_MPX_DISABLE_MANAGEMENT = 44
 
+	// The following consts are available in golang.org/x/sys/unix starting
+	// go1.18
+	PR_SCHED_CORE              = 0x3e
+	PR_SCHED_CORE_CREATE       = 0x1
+	PR_SCHED_CORE_GET          = 0x0
+	PR_SCHED_CORE_SCOPE_THREAD = 0
+
 	// PR_SET_PTRACER allows a specific process (or any, if PR_SET_PTRACER_ANY is
 	// specified) to ptrace the current task.
 	PR_SET_PTRACER     = 0x59616d61
