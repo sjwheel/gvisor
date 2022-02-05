@@ -44,6 +44,55 @@ func Close(t *kernel.Task, args arch.SyscallArguments) (uintptr, *kernel.Syscall
 	return 0, nil, slinux.HandleIOErrorVFS2(t, false /* partial */, err, linuxerr.EINTR, "close", file)
 }
 
+// CloseRange implements linux syscall close_range(2).
+func CloseRange(t *kernel.Task, args arch.SyscallArguments) (uintptr, *kernel.SyscallControl, error) {
+	first := args[0].Uint()
+	last := args[1].Uint()
+	flags := args[2].Uint()
+
+	if (first > last) || (last > uint32(1<<31-1)) {
+		return 0, nil, linuxerr.EINVAL
+	}
+
+	if (flags & ^(linux.CLOSE_RANGE_CLOEXEC | linux.CLOSE_RANGE_UNSHARE)) != 0 {
+		return 0, nil, linuxerr.EINVAL
+	}
+
+	cloexec := flags & linux.CLOSE_RANGE_CLOEXEC
+	unshare := flags & linux.CLOSE_RANGE_UNSHARE
+
+	if unshare != 0 {
+		err := t.Unshare(linux.CLONE_FILES)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+
+	if cloexec != 0 {
+		flagToApply := kernel.FDFlags{
+			CloseOnExec: true,
+		}
+		for fd := first; fd < last; fd++ {
+			// No need to check err, if fd doesn't exist in range (was already closed) then
+			// just proceed to the next one
+			t.FDTable().SetFlagsVFS2(t.AsyncContext(), int32(fd), flagToApply)
+		}
+	} else {
+		for fd := first; fd <= last; fd++ {
+			_, file := t.FDTable().Remove(t, int32(fd))
+			if file == nil {
+				continue
+			}
+			defer file.DecRef(t)
+
+			err := file.OnClose(t)
+			slinux.HandleIOErrorVFS2(t, false /* partial */, err, linuxerr.EINTR, "close_range", file)
+		}
+	}
+
+	return 0, nil, nil
+}
+
 // Dup implements Linux syscall dup(2).
 func Dup(t *kernel.Task, args arch.SyscallArguments) (uintptr, *kernel.SyscallControl, error) {
 	fd := args[0].Int()
