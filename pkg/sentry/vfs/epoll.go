@@ -161,6 +161,11 @@ func (ep *EpollInstance) EventUnregister(e *waiter.Entry) {
 	ep.q.EventUnregister(e)
 }
 
+// Epollable implements FileDescriptionImpl.Epollable.
+func (ep *EpollInstance) Epollable() bool {
+	return true
+}
+
 // Seek implements FileDescriptionImpl.Seek.
 func (ep *EpollInstance) Seek(ctx context.Context, offset int64, whence int32) (int64, error) {
 	// Linux: fs/eventpoll.c:eventpoll_fops.llseek == noop_llseek
@@ -181,6 +186,9 @@ func (ep *EpollInstance) AddInterest(file *FileDescription, num int32, event lin
 		if subep.mightPoll(ep) {
 			return linuxerr.ELOOP
 		}
+	}
+	if !file.Epollable() {
+		return linuxerr.EPERM
 	}
 
 	ep.interestMu.Lock()
