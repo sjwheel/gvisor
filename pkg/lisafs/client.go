@@ -98,7 +98,7 @@ func NewClient(sock *unet.Socket) (*Client, Inode, error) {
 	c.supported = make([]bool, Mount+1)
 	c.supported[Mount] = true
 	var mountResp MountResp
-	if err := c.SndRcvMessage(Mount, 0, NoopMarshal, mountResp.CheckedUnmarshal, nil); err != nil {
+	if err := c.SndRcvMessage(Mount, 0, NoopMarshal, mountResp.CheckedUnmarshal, nil, EmptyMsgString, mountResp.String); err != nil {
 		return nil, Inode{}, err
 	}
 
@@ -220,7 +220,7 @@ func (c *Client) Close() {
 func (c *Client) createChannel() (*channel, error) {
 	var chanResp ChannelResp
 	var fds [2]int
-	if err := c.SndRcvMessage(Channel, 0, NoopMarshal, chanResp.CheckedUnmarshal, fds[:]); err != nil {
+	if err := c.SndRcvMessage(Channel, 0, NoopMarshal, chanResp.CheckedUnmarshal, fds[:], EmptyMsgString, chanResp.String); err != nil {
 		return nil, err
 	}
 	if fds[0] < 0 || fds[1] < 0 {
@@ -278,7 +278,7 @@ func (c *Client) CloseFDBatched(ctx context.Context, fd FDID) {
 
 	req := CloseReq{FDs: toClose}
 	ctx.UninterruptibleSleepStart(false)
-	err := c.SndRcvMessage(Close, uint32(req.SizeBytes()), req.MarshalBytes, NoopUnmarshal, nil)
+	err := c.SndRcvMessage(Close, uint32(req.SizeBytes()), req.MarshalBytes, NoopUnmarshal, nil, req.String, EmptyMsgString)
 	ctx.UninterruptibleSleepFinish(false)
 	if err != nil {
 		log.Warningf("lisafs: batch closing FDs returned error: %v", err)
@@ -292,7 +292,7 @@ func (c *Client) SyncFDs(ctx context.Context, fds []FDID) error {
 	}
 	req := FsyncReq{FDs: fds}
 	ctx.UninterruptibleSleepStart(false)
-	err := c.SndRcvMessage(FSync, uint32(req.SizeBytes()), req.MarshalBytes, NoopUnmarshal, nil)
+	err := c.SndRcvMessage(FSync, uint32(req.SizeBytes()), req.MarshalBytes, NoopUnmarshal, nil, req.String, EmptyMsgString)
 	ctx.UninterruptibleSleepFinish(false)
 	return err
 }
@@ -302,15 +302,11 @@ func (c *Client) SyncFDs(ctx context.Context, fds []FDID) error {
 // and invokes respUnmarshal with the response payload. respFDs is populated
 // with the received FDs, extra fields are set to -1.
 //
-// Note that the function arguments intentionally accept marshal.Marshallable
-// functions like Marshal{Bytes/Unsafe} and Unmarshal{Bytes/Unsafe} instead of
-// directly accepting the marshal.Marshallable interface. Even though just
-// accepting marshal.Marshallable is cleaner, it leads to a heap allocation
-// (even if that interface variable itself does not escape). In other words,
-// implicit conversion to an interface leads to an allocation.
+// See messages.go to understand why function arguments are used instead of
+// combining these functions into an interface type.
 //
-// Precondition: reqMarshal and respUnmarshal must be non-nil.
-func (c *Client) SndRcvMessage(m MID, payloadLen uint32, reqMarshal func(dst []byte) []byte, respUnmarshal func(src []byte) ([]byte, bool), respFDs []int) error {
+// Precondition: function arguments must be non-nil.
+func (c *Client) SndRcvMessage(m MID, payloadLen uint32, reqMarshal func(dst []byte) []byte, respUnmarshal func(src []byte) ([]byte, bool), respFDs []int, reqString func() string, respString func() string) error {
 	if !c.IsSupported(m) {
 		return unix.EOPNOTSUPP
 	}
@@ -327,6 +323,12 @@ func (c *Client) SndRcvMessage(m MID, payloadLen uint32, reqMarshal func(dst []b
 	// Acquire a communicator.
 	comm := c.acquireCommunicator()
 	defer c.releaseCommunicator(comm)
+
+	// Debug logs. Replicate the log.IsLogging(log.Debug) check to avoid having
+	// to call reqString() on the hot path.
+	if log.IsLogging(log.Debug) {
+		log.Debugf("send [%s] %s", comm, reqString())
+	}
 
 	// Marshal the request into comm's payload buffer and make the RPC.
 	reqMarshal(comm.PayloadBuf(payloadLen))
@@ -363,6 +365,9 @@ func (c *Client) SndRcvMessage(m MID, payloadLen uint32, reqMarshal func(dst []b
 		closeFDs(respFDs)
 		var resp ErrorResp
 		resp.UnmarshalUnsafe(comm.PayloadBuf(respPayloadLen))
+		if log.IsLogging(log.Debug) {
+			log.Debugf("recv [%s] %s", comm, resp.String())
+		}
 		return unix.Errno(resp.errno)
 	}
 	if respM != m {
@@ -375,6 +380,9 @@ func (c *Client) SndRcvMessage(m MID, payloadLen uint32, reqMarshal func(dst []b
 	if _, ok := respUnmarshal(comm.PayloadBuf(respPayloadLen)); !ok {
 		log.Warningf("server response unmarshalling for %d message failed", respM)
 		return unix.EIO
+	}
+	if log.IsLogging(log.Debug) {
+		log.Debugf("recv [%s] %s", comm, respString())
 	}
 	return nil
 }
