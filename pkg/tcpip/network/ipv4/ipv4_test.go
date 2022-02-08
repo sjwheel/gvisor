@@ -55,6 +55,7 @@ func TestExcludeBroadcast(t *testing.T) {
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol},
 	})
+	defer s.Close()
 
 	ep := stack.LinkEndpoint(channel.New(256, defaultMTU, ""))
 	if testing.Verbose() {
@@ -349,6 +350,7 @@ func TestForwarding(t *testing.T) {
 				TransportProtocols: []stack.TransportProtocolFactory{icmp.NewProtocol4},
 				Clock:              clock,
 			})
+			defer s.Close()
 
 			// Advance the clock by some unimportant amount to make
 			// it give a more recognisable signature than 00,00,00,00.
@@ -429,9 +431,9 @@ func TestForwarding(t *testing.T) {
 			requestPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Data: hdr.View().ToVectorisedView(),
 			})
+			defer requestPkt.DecRef()
 			requestPkt.NetworkProtocolNumber = header.IPv4ProtocolNumber
 			incomingEndpoint.InjectInbound(header.IPv4ProtocolNumber, requestPkt)
-
 			reply := incomingEndpoint.Read()
 
 			if test.expectErrorICMP {
@@ -1178,6 +1180,8 @@ func TestIPv4Sanity(t *testing.T) {
 				TransportProtocols: []stack.TransportProtocolFactory{icmp.NewProtocol4},
 				Clock:              clock,
 			})
+			defer s.Close()
+
 			// Advance the clock by some unimportant amount to make
 			// it give a more recognisable signature than 00,00,00,00.
 			clock.Advance(time.Millisecond * randomTimeOffset)
@@ -1252,6 +1256,7 @@ func TestIPv4Sanity(t *testing.T) {
 			requestPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Data: hdr.View().ToVectorisedView(),
 			})
+			defer requestPkt.DecRef()
 			e.InjectInbound(header.IPv4ProtocolNumber, requestPkt)
 			reply := e.Read()
 			if reply == nil {
@@ -1545,9 +1550,12 @@ func TestFragmentationWritePacket(t *testing.T) {
 	for _, ft := range fragmentationTests {
 		t.Run(ft.description, func(t *testing.T) {
 			ep := iptestutil.NewMockLinkEndpoint(ft.mtu, nil, math.MaxInt32)
+			defer ep.Close()
 			r := buildRoute(t, ep)
 			pkt := iptestutil.MakeRandPkt(ft.transportHeaderLength, extraHeaderReserve+header.IPv4MinimumSize, []int{ft.payloadSize}, header.IPv4ProtocolNumber)
+			defer pkt.DecRef()
 			source := pkt.Clone()
+			defer source.DecRef()
 			err := r.WritePacket(stack.NetworkHeaderParams{
 				Protocol: tcp.ProtocolNumber,
 				TTL:      ttl,
@@ -1642,7 +1650,9 @@ func TestFragmentationErrors(t *testing.T) {
 	for _, ft := range tests {
 		t.Run(ft.description, func(t *testing.T) {
 			pkt := iptestutil.MakeRandPkt(ft.transportHeaderLength, extraHeaderReserve+header.IPv4MinimumSize, []int{ft.payloadSize}, header.IPv4ProtocolNumber)
+			defer pkt.DecRef()
 			ep := iptestutil.NewMockLinkEndpoint(ft.mtu, ft.mockError, ft.allowPackets)
+			defer ep.Close()
 			r := buildRoute(t, ep)
 			err := r.WritePacket(stack.NetworkHeaderParams{
 				Protocol: tcp.ProtocolNumber,
@@ -1929,6 +1939,7 @@ func TestInvalidFragments(t *testing.T) {
 					ipv4.NewProtocol,
 				},
 			})
+			defer s.Close()
 			e := channel.New(0, 1500, linkAddr)
 			if err := s.CreateNIC(nicID, e); err != nil {
 				t.Fatalf("CreateNIC(%d, _) = %s", nicID, err)
@@ -1967,9 +1978,11 @@ func TestInvalidFragments(t *testing.T) {
 				}
 
 				vv := hdr.View().ToVectorisedView()
-				e.InjectInbound(header.IPv4ProtocolNumber, stack.NewPacketBuffer(stack.PacketBufferOptions{
+				pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 					Data: vv,
-				}))
+				})
+				e.InjectInbound(header.IPv4ProtocolNumber, pkt)
+				pkt.DecRef()
 			}
 
 			if got, want := s.Stats().IP.MalformedPacketsReceived.Value(), test.wantMalformedIPPackets; got != want {
@@ -2158,6 +2171,7 @@ func TestFragmentReassemblyTimeout(t *testing.T) {
 				},
 				Clock: clock,
 			})
+			defer s.Close()
 			e := channel.New(1, 1500, linkAddr)
 			if err := s.CreateNIC(nicID, e); err != nil {
 				t.Fatalf("CreateNIC(%d, _) = %s", nicID, err)
@@ -2197,6 +2211,7 @@ func TestFragmentReassemblyTimeout(t *testing.T) {
 				}
 
 				e.InjectInbound(header.IPv4ProtocolNumber, pkt)
+				pkt.DecRef()
 			}
 
 			clock.Advance(ipv4.ReassembleTimeout)
@@ -2628,6 +2643,7 @@ func TestReceiveFragments(t *testing.T) {
 				TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol},
 				RawFactory:         raw.EndpointFactory{},
 			})
+			defer s.Close()
 			e := channel.New(0, 1280, "\xf0\x00")
 			if err := s.CreateNIC(nicID, e); err != nil {
 				t.Fatalf("CreateNIC(%d, _) = %s", nicID, err)
@@ -2683,10 +2699,11 @@ func TestReceiveFragments(t *testing.T) {
 
 				vv := hdr.View().ToVectorisedView()
 				vv.AppendView(frag.payload)
-
-				e.InjectInbound(header.IPv4ProtocolNumber, stack.NewPacketBuffer(stack.PacketBufferOptions{
+				pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 					Data: vv,
-				}))
+				})
+				e.InjectInbound(header.IPv4ProtocolNumber, pkt)
+				pkt.DecRef()
 			}
 
 			if got, want := s.Stats().UDP.PacketsReceived.Value(), uint64(len(test.expectedPayloads)); got != want {
@@ -2841,15 +2858,18 @@ func TestWriteStats(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ep := iptestutil.NewMockLinkEndpoint(header.IPv4MinimumMTU, &tcpip.ErrInvalidEndpointState{}, test.allowPackets)
+			defer ep.Close()
 			rt := buildRoute(t, ep)
 
 			test.setup(t, rt.Stack())
+			defer rt.Stack().Close()
 			nWritten := 0
 			for i := 0; i < nPackets; i++ {
 				pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 					ReserveHeaderBytes: header.UDPMinimumSize + int(rt.MaxHeaderLength()),
 					Data:               buffer.NewView(0).ToVectorisedView(),
 				})
+				defer pkt.DecRef()
 				pkt.TransportHeader().Push(header.UDPMinimumSize)
 				if err := rt.WritePacket(stack.NetworkHeaderParams{}, pkt); err != nil {
 					break
@@ -2979,9 +2999,11 @@ func TestPacketQueuing(t *testing.T) {
 					DstAddr:     host1IPv4Addr.AddressWithPrefix.Address,
 				})
 				ip.SetChecksum(^ip.CalculateChecksum())
-				e.InjectInbound(ipv4.ProtocolNumber, stack.NewPacketBuffer(stack.PacketBufferOptions{
+				pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 					Data: hdr.View().ToVectorisedView(),
-				}))
+				})
+				defer pkt.DecRef()
+				e.InjectInbound(ipv4.ProtocolNumber, pkt)
 			},
 			checkResp: func(t *testing.T, e *channel.Endpoint) {
 				p := e.Read()
@@ -3022,9 +3044,11 @@ func TestPacketQueuing(t *testing.T) {
 					DstAddr:     host1IPv4Addr.AddressWithPrefix.Address,
 				})
 				ip.SetChecksum(^ip.CalculateChecksum())
-				e.InjectInbound(header.IPv4ProtocolNumber, stack.NewPacketBuffer(stack.PacketBufferOptions{
+				echoPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 					Data: hdr.View().ToVectorisedView(),
-				}))
+				})
+				defer echoPkt.DecRef()
+				e.InjectInbound(header.IPv4ProtocolNumber, echoPkt)
 			},
 			checkResp: func(t *testing.T, e *channel.Endpoint) {
 				p := e.Read()
@@ -3057,6 +3081,7 @@ func TestPacketQueuing(t *testing.T) {
 				TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol},
 				Clock:              clock,
 			})
+			defer s.Close()
 
 			if err := s.CreateNIC(nicID, e); err != nil {
 				t.Fatalf("s.CreateNIC(%d, _): %s", nicID, err)
@@ -3114,9 +3139,11 @@ func TestPacketQueuing(t *testing.T) {
 				copy(packet.ProtocolAddressSender(), host2IPv4Addr.AddressWithPrefix.Address)
 				copy(packet.HardwareAddressTarget(), host1NICLinkAddr)
 				copy(packet.ProtocolAddressTarget(), host1IPv4Addr.AddressWithPrefix.Address)
-				e.InjectInbound(arp.ProtocolNumber, stack.NewPacketBuffer(stack.PacketBufferOptions{
+				pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 					Data: hdr.ToVectorisedView(),
-				}))
+				})
+				e.InjectInbound(arp.ProtocolNumber, pkt)
+				pkt.DecRef()
 			}
 
 			// Expect the response now that the link address has resolved.
@@ -3150,6 +3177,7 @@ func TestCloseLocking(t *testing.T) {
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol},
 	})
+	defer s.Close()
 
 	// Perform NAT so that the endpoint tries to search for a sibling endpoint
 	// which ends up taking the protocol and endpoint lock (in that order).
@@ -3276,6 +3304,8 @@ func TestIcmpRateLimit(t *testing.T) {
 		TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol},
 		Clock:              faketime.NewManualClock(),
 	})
+	defer s.Close()
+
 	s.SetICMPBurst(icmpBurst)
 
 	if err := s.CreateNIC(nicID, e); err != nil {
@@ -3379,9 +3409,11 @@ func TestIcmpRateLimit(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			for round := 0; round < icmpBurst+1; round++ {
-				e.InjectInbound(header.IPv4ProtocolNumber, stack.NewPacketBuffer(stack.PacketBufferOptions{
+				pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 					Data: testCase.createPacket().ToVectorisedView(),
-				}))
+				})
+				e.InjectInbound(header.IPv4ProtocolNumber, pkt)
+				pkt.DecRef()
 				testCase.check(t, e, round)
 			}
 		})

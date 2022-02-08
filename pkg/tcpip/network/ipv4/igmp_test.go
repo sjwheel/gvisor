@@ -109,10 +109,11 @@ func createAndInjectIGMPPacket(e *channel.Endpoint, igmpType header.IGMPType, ma
 	igmp.SetMaxRespTime(maxRespTime)
 	igmp.SetGroupAddress(groupAddress)
 	igmp.SetChecksum(header.IGMPCalculateChecksum(igmp))
-
-	e.InjectInbound(ipv4.ProtocolNumber, stack.NewPacketBuffer(stack.PacketBufferOptions{
+	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Data: buf.ToVectorisedView(),
-	}))
+	})
+	e.InjectInbound(ipv4.ProtocolNumber, pkt)
+	pkt.DecRef()
 }
 
 // TestIGMPV1Present tests the node's ability to fallback to V1 when a V1
@@ -120,6 +121,7 @@ func createAndInjectIGMPPacket(e *channel.Endpoint, igmpType header.IGMPType, ma
 // cycles.
 func TestIGMPV1Present(t *testing.T) {
 	e, s, clock := createStack(t, true)
+	defer s.Close()
 	protocolAddr := tcpip.ProtocolAddress{
 		Protocol:          ipv4.ProtocolNumber,
 		AddressWithPrefix: tcpip.AddressWithPrefix{Address: stackAddr, PrefixLen: defaultPrefixLength},
@@ -201,6 +203,7 @@ func TestIGMPV1Present(t *testing.T) {
 
 func TestSendQueuedIGMPReports(t *testing.T) {
 	e, s, clock := createStack(t, true)
+	defer s.Close()
 
 	// Joining a group without an assigned address should queue IGMP packets; none
 	// should be sent without an assigned address.
@@ -359,6 +362,7 @@ func TestIGMPPacketValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			e, s, _ := createStack(t, true)
+			defer s.Close()
 			for _, address := range test.stackAddresses {
 				protocolAddr := tcpip.ProtocolAddress{
 					Protocol:          ipv4.ProtocolNumber,

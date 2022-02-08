@@ -49,6 +49,8 @@ func TestClearEndpointFromProtocolOnClose(t *testing.T) {
 	s := stack.New(stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{NewProtocol},
 	})
+	defer s.Close()
+
 	proto := s.NetworkProtocolInstance(ProtocolNumber).(*protocol)
 	nic := testInterface{nicID: 1}
 	ep := proto.NewEndpoint(&nic, nil).(*endpoint)
@@ -81,6 +83,8 @@ func TestMultiCounterStatsInitialization(t *testing.T) {
 	s := stack.New(stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{NewProtocol},
 	})
+	defer s.Close()
+
 	proto := s.NetworkProtocolInstance(ProtocolNumber).(*protocol)
 	var nic testInterface
 	ep := proto.NewEndpoint(&nic, nil).(*endpoint)

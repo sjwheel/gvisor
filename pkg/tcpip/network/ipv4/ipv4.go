@@ -426,6 +426,7 @@ func (e *endpoint) handleFragments(_ *stack.Route, networkMTU uint32, pkt *stack
 			fragPkt.DecRef()
 			return n, pf.RemainingFragmentCount(), nil
 		}
+		fragPkt.DecRef()
 	}
 }
 
@@ -1239,7 +1240,9 @@ func (p *protocol) DefaultTTL() uint8 {
 }
 
 // Close implements stack.TransportProtocol.
-func (*protocol) Close() {}
+func (p *protocol) Close() {
+	p.fragmentation.Release()
+}
 
 // Wait implements stack.TransportProtocol.
 func (*protocol) Wait() {}

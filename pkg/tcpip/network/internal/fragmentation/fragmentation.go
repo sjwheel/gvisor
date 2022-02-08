@@ -19,9 +19,9 @@ package fragmentation
 import (
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/log"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/buffer"
@@ -189,7 +189,6 @@ func (f *Fragmentation) Process(
 		}
 	}
 	f.mu.Unlock()
-
 	resPkt, firstFragmentProto, done, memConsumed, err := r.process(first, last, more, proto, pkt)
 	if err != nil {
 		// We probably got an invalid sequence of fragments. Just
@@ -219,6 +218,15 @@ func (f *Fragmentation) Process(
 	return resPkt, firstFragmentProto, done, nil
 }
 
+// Release releases all underlying resources.
+func (f *Fragmentation) Release() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.reassemblers {
+		f.release(r, false /* timedOut */)
+	}
+}
+
 func (f *Fragmentation) release(r *reassembler, timedOut bool) {
 	// Before releasing a fragment we need to check if r is already marked as done.
 	// Otherwise, we would delete it twice.
@@ -230,7 +238,7 @@ func (f *Fragmentation) release(r *reassembler, timedOut bool) {
 	f.rList.Remove(r)
 	f.memSize -= r.memSize
 	if f.memSize < 0 {
-		log.Printf("memory counter < 0 (%d), this is an accounting bug that requires investigation", f.memSize)
+		log.Infof("memory counter < 0 (%d), this is an accounting bug that requires investigation", f.memSize)
 		f.memSize = 0
 	}
 
@@ -239,12 +247,15 @@ func (f *Fragmentation) release(r *reassembler, timedOut bool) {
 	}
 	if r.pkt != nil {
 		r.pkt.DecRef()
+		r.pkt = nil
 	}
 	for _, h := range r.holes {
 		if h.pkt != nil {
 			h.pkt.DecRef()
+			h.pkt = nil
 		}
 	}
+	r.holes = nil
 }
 
 // releaseReassemblersLocked releases already-expired reassemblers, then
